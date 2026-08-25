@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --webpack",
-    "build": "next build --turbopack",
+    "build": "pnpm db:push && next build -- turbopack",
     "start": "next start",
     "lint": "eslint",
     "type-check": "tsc --noEmit",
