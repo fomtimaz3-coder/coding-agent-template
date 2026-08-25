@@ -398,8 +398,8 @@ export function TaskForm({
   return (
     <div className="w-full max-w-2xl">
       <div className="text-center mb-8">
-        <h1 className="text-4xl font-bold mb-4">Coding Agent Template</h1>
-        <p className="text-lg text-muted-foreground mb-2">
+        <h1 className="text-4xl font-semibold tracking-tight mb-3">What are we building?</h1>
+        <p className="text-base text-muted-foreground mb-2">
           Multi-agent AI coding platform powered by{' '}
           <a
             href="https://vercel.com/docs/sandbox"
@@ -428,7 +428,7 @@ export function TaskForm({
             <Textarea
               ref={textareaRef}
               id="prompt"
-              placeholder="Describe what you want the AI agent to do..."
+              placeholder="Describe what you want to build or fix…"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               onKeyDown={handleTextareaKeyDown}
@@ -437,6 +437,24 @@ export function TaskForm({
               rows={4}
               className="w-full border-0 resize-none focus-visible:ring-0 focus-visible:ring-offset-0 p-4 text-base !bg-transparent shadow-none!"
             />
+          </div>
+
+          <div className="flex flex-wrap gap-2 px-4 pb-2">
+            {[
+              ['Fix a bug', 'Find and fix the main bug in this repo'],
+              ['Add a feature', 'Add a small, well-tested feature'],
+              ['Explain code', 'Explain the most important parts of this codebase'],
+            ].map(([label, value]) => (
+              <button
+                key={label}
+                type="button"
+                disabled={isSubmitting}
+                onClick={() => setPrompt(value)}
+                className="rounded-full border border-border/70 bg-background/70 px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground disabled:opacity-50"
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
           {/* Agent Selection */}
