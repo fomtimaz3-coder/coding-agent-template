@@ -34,6 +34,7 @@ export async function executeAgentInSandbox(
   sessionId?: string,
   taskId?: string,
   agentMessageId?: string,
+  githubToken?: string,
 ): Promise<AgentExecutionResult> {
   // Check for cancellation before starting agent execution
   if (onCancellationCheck && (await onCancellationCheck())) {
@@ -50,7 +51,7 @@ export async function executeAgentInSandbox(
   let githubToken: string | undefined
   if (agentType === 'copilot') {
     const { getUserGitHubToken } = await import('@/lib/github/user-token')
-    githubToken = (await getUserGitHubToken()) || undefined
+    githubToken = githubToken || (await getUserGitHubToken()) || undefined
   }
 
   // Temporarily override process.env with user's API keys if provided
@@ -87,6 +88,7 @@ export async function executeAgentInSandbox(
           sessionId,
           taskId,
           agentMessageId,
+          githubToken,
         )
 
       case 'codex':
