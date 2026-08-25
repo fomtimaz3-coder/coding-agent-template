@@ -37,6 +37,7 @@ export async function executeCopilotInSandbox(
   isResumed?: boolean,
   sessionId?: string,
   taskId?: string,
+  githubToken?: string,
 ): Promise<AgentExecutionResult> {
   let agentMessageId: string | null = null
   let accumulatedContent = ''
@@ -90,7 +91,7 @@ export async function executeCopilotInSandbox(
     }
 
     // Check if GH_TOKEN or GITHUB_TOKEN is available
-    if (!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
+    if (!githubToken && !process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
       return {
         success: false,
         error: 'GH_TOKEN or GITHUB_TOKEN environment variable is required but not found',
@@ -192,6 +193,7 @@ EOF`
     let capturedOutput = ''
     let capturedError = ''
     let executionFailed = false
+    let commandExitCode: number | undefined
 
     // Create custom writable streams to capture the output
     const { Writable } = await import('stream')
@@ -271,7 +273,7 @@ EOF`
     }
 
     // Build the copilot command
-    const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN
+    const token = githubToken || process.env.GH_TOKEN || process.env.GITHUB_TOKEN
     const homeDir = '/home/vercel-sandbox'
     const mcpConfigPath = `${homeDir}/.copilot/mcp-config.json`
     const modelFlag = selectedModel ? ` --model ${selectedModel}` : ''
@@ -299,18 +301,20 @@ EOF`
 
     // Execute copilot CLI (without detached mode so we can wait for completion)
     try {
-      await sandbox.runCommand({
+      const copilotResult = await sandbox.runCommand({
         cmd: 'copilot',
         args: args,
         env: {
           GH_TOKEN: token!,
           GITHUB_TOKEN: token!,
+          NO_COLOR: '1',
         },
         sudo: false,
         cwd: PROJECT_DIR,
         stdout: captureStdout,
         stderr: captureStderr,
       })
+      commandExitCode = copilotResult.exitCode
 
       if (logger) {
         await logger.info('GitHub Copilot CLI execution completed')
@@ -324,7 +328,9 @@ EOF`
       }
     }
 
-    if (capturedError.trim()) {
+    // Copilot writes progress and warnings to stderr during successful runs.
+    // Only the process exit code (or an exception) determines failure.
+    if (typeof commandExitCode === 'number' && commandExitCode !== 0) {
       executionFailed = true
     }
 
@@ -359,7 +365,7 @@ EOF`
     if (executionFailed) {
       return {
         success: false,
-        error: redactSensitiveInfo(capturedError || 'GitHub Copilot CLI failed to execute'),
+        error: redactSensitiveInfo(capturedError.trim() || `GitHub Copilot CLI exited with code ${commandExitCode ?? 'unknown'}`),
         cliName: 'copilot',
         changesDetected: false,
       }
