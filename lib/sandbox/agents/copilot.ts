@@ -328,6 +328,37 @@ EOF`
       }
     }
 
+    // Some Copilot accounts do not expose every model alias. Retry once without
+    // the optional model only when the CLI rejects the model before doing work.
+    const modelWasRejected =
+      selectedModel &&
+      commandExitCode !== 0 &&
+      /model|not found|invalid|unsupported/i.test(capturedError)
+    if (modelWasRejected) {
+      await logger.info(`Model ${selectedModel} was rejected by Copilot; retrying with the account default model`)
+      const fallbackArgs = args.filter((arg, index) => arg !== selectedModel || args[index - 1] !== '--model')
+      const modelIndex = fallbackArgs.indexOf('--model')
+      if (modelIndex >= 0) fallbackArgs.splice(modelIndex, 2)
+      capturedOutput = ''
+      capturedError = ''
+      commandExitCode = undefined
+      try {
+        const fallbackResult = await sandbox.runCommand({
+          cmd: 'copilot',
+          args: fallbackArgs,
+          env: { GH_TOKEN: token!, GITHUB_TOKEN: token!, NO_COLOR: '1' },
+          sudo: false,
+          cwd: PROJECT_DIR,
+          stdout: captureStdout,
+          stderr: captureStderr,
+        })
+        commandExitCode = fallbackResult.exitCode
+      } catch (error) {
+        executionFailed = true
+        capturedError = error instanceof Error ? error.message : 'Copilot fallback failed'
+      }
+    }
+
     // Copilot writes progress and warnings to stderr during successful runs.
     // Only the process exit code (or an exception) determines failure.
     if (typeof commandExitCode === 'number' && commandExitCode !== 0) {
