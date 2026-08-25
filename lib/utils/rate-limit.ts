@@ -37,8 +37,9 @@ export async function checkRateLimit(
       ),
     )
 
-  // Total count includes both new tasks and follow-up messages
-  const count = tasksToday.length + userMessagesToday.length
+  // The first user message belongs to a newly created task and must not be
+  // counted twice. The larger count represents tasks plus follow-ups.
+  const count = Math.max(tasksToday.length, userMessagesToday.length)
   const remaining = Math.max(0, maxMessagesPerDay - count)
   const allowed = count < maxMessagesPerDay
 
