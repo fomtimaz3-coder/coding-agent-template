@@ -72,7 +72,14 @@ export async function createSandbox(config: SandboxConfig, logger: TaskLogger): 
 
     // Use the specified timeout (maxDuration) for sandbox lifetime
     // keepAlive only controls whether we shutdown after task completion
-    const timeoutMs = config.timeout ? parseInt(config.timeout.replace(/\D/g, '')) * 60 * 1000 : 60 * 60 * 1000 // Default 1 hour
+    const defaultTimeoutMs = 5 * 60 * 1000
+    const maxTimeoutMs = 45 * 60 * 1000
+    const timeoutMatch = config.timeout?.trim().match(/^(\d+)(?:\s*m(?:in(?:ute)?s?)?)?$/i)
+    const requestedTimeoutMinutes = timeoutMatch ? Number(timeoutMatch[1]) : NaN
+    const timeoutMs =
+      Number.isFinite(requestedTimeoutMinutes) && requestedTimeoutMinutes > 0
+        ? Math.min(requestedTimeoutMinutes * 60 * 1000, maxTimeoutMs)
+        : defaultTimeoutMs
 
     // Determine ports based on project type (will be detected after cloning)
     // Default to both 3000 (Next.js) and 5173 (Vite) for now
@@ -985,7 +992,31 @@ SKILL_EOF`
     }
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
-    console.error('Sandbox creation error:', error)
+    const apiError = error as {
+      response?: { status?: number; statusText?: string }
+      json?: { error?: { code?: string; message?: string }; code?: string; message?: string }
+    }
+    const apiDescription = apiError.response
+      ? [
+          `status=${apiError.response.status ?? 'unknown'}`,
+          apiError.response.statusText ? `statusText=${apiError.response.statusText}` : '',
+          apiError.json?.error?.code || apiError.json?.code
+            ? `code=${apiError.json.error?.code || apiError.json.code}`
+            : '',
+          apiError.json?.error?.message || apiError.json?.message
+            ? `message=${apiError.json.error?.message || apiError.json.message}`
+            : '',
+        ]
+          .filter(Boolean)
+          .join(', ')
+      : undefined
+    const safeErrorDescription = apiDescription || 'No Vercel API response details available'
+    console.error(`Sandbox creation error: ${safeErrorDescription}`)
+    await logger.error(
+      redactSensitiveInfo(
+        apiDescription ? `Sandbox API error: ${apiDescription}` : `Sandbox API error: ${errorMessage}`,
+      ),
+    )
     await logger.error('Error occurred during sandbox creation')
 
     return {

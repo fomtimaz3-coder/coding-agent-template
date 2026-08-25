@@ -162,10 +162,10 @@ export function TaskForm({
   selectedOwner,
   selectedRepo,
   initialInstallDependencies = false,
-  initialMaxDuration = 300,
+  initialMaxDuration = 45,
   initialKeepAlive = false,
   initialEnableBrowser = false,
-  maxSandboxDuration = 300,
+  maxSandboxDuration = 45,
 }: TaskFormProps) {
   const [prompt, setPrompt] = useAtom(taskPromptAtom)
   const [savedAgent, setSavedAgent] = useAtom(lastSelectedAgentAtom)
@@ -726,11 +726,6 @@ export function TaskForm({
                                 <SelectItem value="15">15 minutes</SelectItem>
                                 <SelectItem value="30">30 minutes</SelectItem>
                                 <SelectItem value="45">45 minutes</SelectItem>
-                                <SelectItem value="60">1 hour</SelectItem>
-                                <SelectItem value="120">2 hours</SelectItem>
-                                <SelectItem value="180">3 hours</SelectItem>
-                                <SelectItem value="240">4 hours</SelectItem>
-                                <SelectItem value="300">5 hours</SelectItem>
                               </SelectContent>
                             </Select>
                           </div>
