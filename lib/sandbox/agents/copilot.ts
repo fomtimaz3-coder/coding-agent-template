@@ -10,36 +10,46 @@ import { generateId } from '@/lib/utils/id'
 
 type Connector = typeof connectors.$inferSelect
 
-const COPILOT_PATH_EXPORT = 'export PATH=\"$HOME/.npm-global/bin:$HOME/.local/bin:/usr/local/bin:$PATH\"'
+const COPILOT_PATH_EXPORT = 'export PATH=\"$HOME/.npm-global/bin:$HOME/.global/npm/bin:$HOME/.npm/bin:$HOME/.local/bin:/usr/local/bin:$HOME/.local/share/pnpm:$PATH\"'
 const COPILOT_BIN = 'copilot'
 
-// Normalize model names - Copilot CLI is picky
+// Normalize model names - Copilot CLI is picky, gpt-5 is NOT available yet as of 2026-08
+// Valid models per https://docs.github.com/en/copilot/reference/copilot-cli : claude-sonnet-4, claude-sonnet-4.5, claude-haiku-4.5, claude-opus-4.5, gpt-4o, gpt-4.1
 const COPILOT_MODEL_MAP: Record<string, string> = {
   'claude-sonnet-4.5': 'claude-sonnet-4.5',
   'claude-sonnet-4': 'claude-sonnet-4',
   'claude-haiku-4.5': 'claude-haiku-4.5',
   'claude-opus-4.5': 'claude-opus-4.5',
-  'claude-opus-4.6': 'claude-opus-4.5', // fallback
-  'gpt-5': 'gpt-5',
-  'gpt-5.1': 'gpt-5',
+  'claude-opus-4.6': 'claude-opus-4.5', // fallback to 4.5
+  'gpt-5': 'gpt-4.1', // gpt-5 not available in copilot yet, fallback to 4.1
+  'gpt-5.1': 'gpt-4.1',
+  'gpt-5.1-codex': 'gpt-4.1',
+  'gpt-5-codex': 'gpt-4.1',
+  'gpt-5-mini': 'gpt-4o',
+  'gpt-5-nano': 'gpt-4o',
   'gpt-4.1': 'gpt-4.1',
   'gpt-4o': 'gpt-4o',
+  'openai/gpt-5.1': 'gpt-4.1',
+  'openai/gpt-5': 'gpt-4.1',
+  'openai/gpt-4.1': 'gpt-4.1',
 }
 
 function normalizeCopilotModel(model?: string): string | undefined {
   if (!model) return undefined
-  // Direct map
+  // Direct map first
   if (COPILOT_MODEL_MAP[model]) return COPILOT_MODEL_MAP[model]
-  // Try lower case contains
+  // Try lower case contains - gpt-5 is NOT available, map to gpt-4.1
   const lower = model.toLowerCase()
   if (lower.includes('sonnet-4.5')) return 'claude-sonnet-4.5'
   if (lower.includes('sonnet-4')) return 'claude-sonnet-4'
   if (lower.includes('haiku')) return 'claude-haiku-4.5'
   if (lower.includes('opus')) return 'claude-opus-4.5'
-  if (lower.includes('gpt-5')) return 'gpt-5'
+  if (lower.includes('gpt-5')) return 'gpt-4.1' // fallback, gpt-5 not available
   if (lower.includes('gpt-4.1')) return 'gpt-4.1'
-  // Return as-is if not mapped - let CLI decide
-  return model
+  if (lower.includes('gpt-4o') || lower.includes('gpt-4')) return 'gpt-4o'
+  if (lower.includes('claude')) return 'claude-sonnet-4.5' // safe default for any claude variant
+  // Default to claude-sonnet-4 as most stable for free tier
+  return 'claude-sonnet-4'
 }
 
 // Helper function to run command and collect logs in project directory
@@ -114,10 +124,25 @@ export async function executeCopilotInSandbox(
         }
       }
 
-      // Final verification
-      const verifyInstall = await runWithPath(sandbox, 'which copilot; ls -la $HOME/.npm-global/bin/ | grep copilot || true')
+      // Final verification - search all possible locations
+      const verifyInstall = await runWithPath(
+        sandbox,
+        'which copilot; ls -la $HOME/.npm-global/bin/ 2>/dev/null | grep copilot || true; ls -la $HOME/.global/npm/bin/ 2>/dev/null | grep copilot || true; find $HOME -name copilot -type f 2>/dev/null | head -n 5 || true',
+      )
       if (verifyInstall.output) {
         await logger.info(redactSensitiveInfo(verifyInstall.output.trim().slice(0, 1000)))
+      }
+
+      // If binary found in .global/npm but not in .npm-global/bin, create symlink for consistency
+      await runCommandInSandbox(sandbox, 'sh', [
+        '-c',
+        'if [ -f $HOME/.global/npm/bin/copilot ] && [ ! -f $HOME/.npm-global/bin/copilot ]; then mkdir -p $HOME/.npm-global/bin && ln -sf $HOME/.global/npm/bin/copilot $HOME/.npm-global/bin/copilot; echo "Symlinked copilot from .global to .npm-global"; fi',
+      ])
+
+      // Log available models if possible
+      const modelsCheck = await runWithPath(sandbox, 'copilot --help 2>&1 | grep -A 20 "model" || copilot --help 2>&1 | head -n 50')
+      if (modelsCheck.output) {
+        await logger.info(redactSensitiveInfo(modelsCheck.output.trim().slice(0, 1000)))
       }
 
       // If still not found, try pnpm or yarn global or direct npx
@@ -348,11 +373,11 @@ export async function executeCopilotInSandbox(
     await logger.command(logCommand)
     await logger.info(`Executing GitHub Copilot CLI with model: ${normalizedModel || 'default'}`)
 
-    // Execute with robust env - include PATH with npm-global
+    // Execute with robust env - include PATH with all possible npm locations (seen in logs: .global/npm/bin)
     const execEnv = {
       GH_TOKEN: token!,
       GITHUB_TOKEN: token!,
-      PATH: '/home/vercel-sandbox/.npm-global/bin:/home/vercel-sandbox/.local/bin:/usr/local/bin:/usr/bin:/bin',
+      PATH: '/home/vercel-sandbox/.npm-global/bin:/home/vercel-sandbox/.global/npm/bin:/home/vercel-sandbox/.npm/bin:/home/vercel-sandbox/.local/bin:/usr/local/bin:/usr/bin:/bin:/home/vercel-sandbox/.local/share/pnpm',
       HOME: '/home/vercel-sandbox',
       // Force non-interactive
       CI: 'true',
@@ -379,8 +404,9 @@ export async function executeCopilotInSandbox(
       executionError = error instanceof Error ? error.message : String(error)
       await logger.info(`GitHub Copilot CLI execution finished with note: ${redactSensitiveInfo(executionError.slice(0, 500))}`)
 
-      // If failed with model error, retry without model flag
-      if (capturedError.toLowerCase().includes('model') || executionError.toLowerCase().includes('model')) {
+      // If failed with model error (e.g. "Model gpt-5 is not available"), retry without model flag or with safe default
+      const combinedError = (capturedError + ' ' + executionError).toLowerCase()
+      if (combinedError.includes('model') || combinedError.includes('not available') || combinedError.includes('unknown model')) {
         await logger.info('Model error detected, retrying with default model...')
 
         capturedOutput = ''
@@ -409,9 +435,11 @@ export async function executeCopilotInSandbox(
         })
 
         try {
+          // Retry with safe default model that is known to work
+          await logger.info('Retrying with safe default model claude-sonnet-4...')
           await sandbox.runCommand({
             cmd: COPILOT_BIN,
-            args: ['-p', instruction, '--allow-all-tools', '--no-color'],
+            args: ['-p', instruction, '--allow-all-tools', '--no-color', '--model', 'claude-sonnet-4'],
             env: execEnv,
             sudo: false,
             cwd: PROJECT_DIR,

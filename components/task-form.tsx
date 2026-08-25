@@ -89,10 +89,11 @@ const AGENT_MODELS = {
   ],
   copilot: [
     { value: 'claude-sonnet-4.5', label: 'Sonnet 4.5 (Recommended)' },
-    { value: 'claude-sonnet-4', label: 'Sonnet 4' },
+    { value: 'claude-sonnet-4', label: 'Sonnet 4 (Stable)' },
     { value: 'claude-haiku-4.5', label: 'Haiku 4.5 (Fast)' },
-    { value: 'gpt-5', label: 'GPT-5' },
+    { value: 'claude-opus-4.5', label: 'Opus 4.5' },
     { value: 'gpt-4.1', label: 'GPT-4.1 (Stable)' },
+    { value: 'gpt-4o', label: 'GPT-4o' },
   ],
   cursor: [
     { value: 'auto', label: 'Auto' },
@@ -125,7 +126,7 @@ const AGENT_MODELS = {
 const DEFAULT_MODELS = {
   claude: 'claude-sonnet-4-5',
   codex: 'openai/gpt-5.1',
-  copilot: 'claude-sonnet-4.5',
+  copilot: 'claude-sonnet-4',
   cursor: 'auto',
   gemini: 'gemini-3-pro-preview',
   opencode: 'gpt-5',

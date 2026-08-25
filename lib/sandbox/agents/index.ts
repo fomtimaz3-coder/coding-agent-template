@@ -97,14 +97,14 @@ export async function executeAgentInSandbox(
 
     if (shouldFallbackToCopilot) {
       await logger.info(`No API key for ${agentType}, falling back to Copilot (free with GitHub)`)
-      // Map selected model to copilot-compatible model
+      // Map selected model to copilot-compatible model - gpt-5 NOT available in Copilot CLI, use gpt-4.1
       const copilotModel = selectedModel?.includes('claude') || selectedModel?.includes('sonnet') || selectedModel?.includes('opus')
-        ? 'claude-sonnet-4.5'
+        ? 'claude-sonnet-4'
         : selectedModel?.includes('gpt') || selectedModel?.includes('openai')
-          ? 'gpt-5'
+          ? 'gpt-4.1' // gpt-5 not available in Copilot CLI yet
           : selectedModel?.includes('gemini')
-            ? 'claude-sonnet-4.5' // Gemini models fallback to Claude on Copilot
-            : 'claude-sonnet-4.5'
+            ? 'claude-sonnet-4' // Gemini models fallback to Claude on Copilot
+            : 'claude-sonnet-4'
 
       return await executeCopilotInSandbox(
         sandbox,
