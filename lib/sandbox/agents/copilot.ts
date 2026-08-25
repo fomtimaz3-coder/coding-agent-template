@@ -324,6 +324,10 @@ EOF`
       }
     }
 
+    if (capturedError.trim()) {
+      executionFailed = true
+    }
+
     const result = {
       success: !executionFailed,
       output: capturedOutput,
