@@ -91,7 +91,7 @@ const AGENT_MODELS = {
     { value: 'claude-sonnet-4.5', label: 'Sonnet 4.5' },
     { value: 'claude-sonnet-4', label: 'Sonnet 4' },
     { value: 'claude-haiku-4.5', label: 'Haiku 4.5' },
-    { value: 'gpt-5', label: 'GPT-5' },
+    { value: 'gpt-5.2', label: 'GPT-5.2' },
   ],
   cursor: [
     { value: 'auto', label: 'Auto' },
