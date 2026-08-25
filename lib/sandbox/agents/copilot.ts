@@ -191,6 +191,7 @@ EOF`
     // Capture output by intercepting the streams
     let capturedOutput = ''
     let capturedError = ''
+    let executionFailed = false
 
     // Create custom writable streams to capture the output
     const { Writable } = await import('stream')
@@ -315,15 +316,16 @@ EOF`
         await logger.info('GitHub Copilot CLI execution completed')
       }
     } catch (error) {
-      // Command may exit with non-zero code, but that's okay
-      // We'll check for changes below
+      executionFailed = true
+      const message = error instanceof Error ? error.message : 'GitHub Copilot CLI exited with an error'
+      capturedError = capturedError || message
       if (logger) {
-        await logger.info('GitHub Copilot CLI execution finished')
+        await logger.error(redactSensitiveInfo(message))
       }
     }
 
     const result = {
-      success: true,
+      success: !executionFailed,
       output: capturedOutput,
       error: capturedError,
       command: logCommand,
@@ -348,6 +350,15 @@ EOF`
         .set({ content: accumulatedContent })
         .where(eq(taskMessages.id, agentMessageId))
         .catch((err: Error) => console.error('Failed to update message:', err))
+    }
+
+    if (executionFailed) {
+      return {
+        success: false,
+        error: redactSensitiveInfo(capturedError || 'GitHub Copilot CLI failed to execute'),
+        cliName: 'copilot',
+        changesDetected: false,
+      }
     }
 
     // Check if any files were modified
