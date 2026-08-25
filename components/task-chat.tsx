@@ -25,6 +25,12 @@ import { useAtom } from 'jotai'
 import { taskChatInputAtomFamily } from '@/lib/atoms/task'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 
+interface RateLimitInfo {
+  remaining: number
+  total: number
+  resetAt: string
+}
+
 interface TaskChatProps {
   taskId: string
   task: Task
@@ -67,6 +73,7 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
   const [currentTime, setCurrentTime] = useState(Date.now())
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
   const [isStopping, setIsStopping] = useState(false)
+  const [rateLimit, setRateLimit] = useState<RateLimitInfo | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const previousMessageCountRef = useRef(0)
@@ -108,6 +115,15 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
     if (!container) return
     container.scrollTop = container.scrollHeight
   }
+
+  const fetchRateLimit = useCallback(async () => {
+    try {
+      const response = await fetch('/api/auth/rate-limit')
+      if (response.ok) setRateLimit(await response.json())
+    } catch {
+      // Quota visibility is helpful but must never break the chat.
+    }
+  }, [])
 
   const fetchMessages = useCallback(
     async (showLoading = true) => {
@@ -263,14 +279,20 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
 
   useEffect(() => {
     fetchMessages(true) // Show loading on initial fetch
+    fetchRateLimit()
 
     // Poll for new messages every 3 seconds without showing loading state
     const interval = setInterval(() => {
       fetchMessages(false) // Don't show loading on polls
     }, 3000)
 
-    return () => clearInterval(interval)
-  }, [fetchMessages])
+    const quotaInterval = setInterval(fetchRateLimit, 15000)
+
+    return () => {
+      clearInterval(interval)
+      clearInterval(quotaInterval)
+    }
+  }, [fetchMessages, fetchRateLimit])
 
   // Auto-refresh for active tab (Comments, Checks, Deployments)
   useEffect(() => {
@@ -485,6 +507,7 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
       if (response.ok) {
         // Refresh messages to show the new user message without loading state
         await fetchMessages(false)
+        await fetchRateLimit()
         // Message was sent successfully, keep it cleared
       } else {
         toast.error(data.error || 'Failed to send message')
@@ -1292,7 +1315,7 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
             ) : (
               <button
                 onClick={handleSendMessage}
-                disabled={!newMessage.trim() || isSending}
+                disabled={!newMessage.trim() || isSending || rateLimit?.remaining === 0}
                 className="absolute bottom-2 right-2 rounded-full h-5 w-5 bg-primary text-primary-foreground hover:bg-primary/90 flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isSending ? <Loader2 className="h-3 w-3 animate-spin" /> : <ArrowUp className="h-3 w-3" />}
