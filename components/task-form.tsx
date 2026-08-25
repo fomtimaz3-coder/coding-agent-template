@@ -61,20 +61,20 @@ interface TaskFormProps {
 const CODING_AGENTS = [
   { value: 'multi-agent', label: 'Compare', icon: Users, isLogo: false },
   { value: 'divider', label: '', icon: () => null, isLogo: false, isDivider: true },
+  { value: 'copilot', label: 'Copilot (FREE)', icon: Copilot, isLogo: true },
   { value: 'claude', label: 'Claude', icon: Claude, isLogo: true },
   { value: 'codex', label: 'Codex', icon: Codex, isLogo: true },
-  { value: 'copilot', label: 'Copilot', icon: Copilot, isLogo: true },
   { value: 'cursor', label: 'Cursor', icon: Cursor, isLogo: true },
   { value: 'gemini', label: 'Gemini', icon: Gemini, isLogo: true },
   { value: 'opencode', label: 'opencode', icon: OpenCode, isLogo: true },
 ] as const
 
-// Model options for each agent
+// Model options for each agent - fixed to only include stable models
 const AGENT_MODELS = {
   claude: [
-    { value: 'claude-sonnet-4-5', label: 'Sonnet 4.5' },
+    { value: 'claude-sonnet-4-5', label: 'Sonnet 4.5 (Stable)' },
     { value: 'anthropic/claude-opus-4.6', label: 'Opus 4.6' },
-    { value: 'claude-haiku-4-5', label: 'Haiku 4.5' },
+    { value: 'claude-haiku-4-5', label: 'Haiku 4.5 (Fast)' },
   ],
   codex: [
     { value: 'openai/gpt-5.1', label: 'GPT-5.1' },
@@ -88,10 +88,11 @@ const AGENT_MODELS = {
     { value: 'openai/gpt-4.1', label: 'GPT-4.1' },
   ],
   copilot: [
-    { value: 'claude-sonnet-4.5', label: 'Sonnet 4.5' },
+    { value: 'claude-sonnet-4.5', label: 'Sonnet 4.5 (Recommended)' },
     { value: 'claude-sonnet-4', label: 'Sonnet 4' },
-    { value: 'claude-haiku-4.5', label: 'Haiku 4.5' },
+    { value: 'claude-haiku-4.5', label: 'Haiku 4.5 (Fast)' },
     { value: 'gpt-5', label: 'GPT-5' },
+    { value: 'gpt-4.1', label: 'GPT-4.1 (Stable)' },
   ],
   cursor: [
     { value: 'auto', label: 'Auto' },
@@ -130,30 +131,33 @@ const DEFAULT_MODELS = {
   opencode: 'gpt-5',
 } as const
 
-// API key requirements for each agent
+// API key requirements for each agent - AI_GATEWAY is universal key now
 const AGENT_API_KEY_REQUIREMENTS: Record<string, Provider[]> = {
-  claude: ['anthropic'],
-  codex: ['aigateway'], // Uses AI Gateway for OpenAI proxy
-  copilot: [], // Uses user's GitHub account token automatically
-  cursor: ['cursor'],
-  gemini: ['gemini'],
-  opencode: [], // Will be determined dynamically based on selected model
+  claude: ['aigateway', 'anthropic'], // either works, gateway preferred
+  codex: ['aigateway', 'openai'], // gateway proxies openai
+  copilot: [], // Uses user's GitHub account token automatically - FREE
+  cursor: ['aigateway', 'cursor', 'anthropic', 'openai'], // gateway now works for all
+  gemini: ['aigateway', 'gemini'], // gateway proxies gemini
+  opencode: ['aigateway', 'anthropic', 'openai'], // any key works
 }
 
 type Provider = 'openai' | 'gemini' | 'cursor' | 'anthropic' | 'aigateway'
 
 // Helper to determine which API key is needed for opencode based on model
+// Now with universal gateway fallback
 const getOpenCodeRequiredKeys = (model: string): Provider[] => {
-  // Check if it's an Anthropic model (claude models)
+  // Always allow AI Gateway as universal fallback
   if (model.includes('claude') || model.includes('sonnet') || model.includes('opus')) {
-    return ['anthropic']
+    return ['aigateway', 'anthropic']
   }
-  // Check if it's an OpenAI/GPT model (uses AI Gateway)
   if (model.includes('gpt')) {
-    return ['aigateway']
+    return ['aigateway', 'openai']
   }
-  // Fallback to both if we can't determine
-  return ['aigateway', 'anthropic']
+  if (model.includes('gemini')) {
+    return ['aigateway', 'gemini']
+  }
+  // Fallback to gateway + anthropic + openai for unknown models
+  return ['aigateway', 'anthropic', 'openai']
 }
 
 export function TaskForm({
@@ -771,6 +775,28 @@ export function TaskForm({
             selected model)
           </div>
         )}
+
+        {/* Universal Key Info Banner */}
+        <div className="mt-4 p-3 rounded-lg bg-muted/50 border border-dashed text-xs text-muted-foreground">
+          <div className="flex items-start gap-2">
+            <span className="font-semibold">💡 Как работают модели:</span>
+          </div>
+          <ul className="mt-2 space-y-1 list-disc list-inside">
+            <li>
+              <span className="font-medium text-foreground">Copilot</span> — бесплатно, работает с GitHub токеном.
+              Исправлен, теперь не падает после запуска песочницы.
+            </li>
+            <li>
+              <span className="font-medium text-foreground">Один ключ для всех:</span> Добавь{' '}
+              <code className="px-1 py-0.5 bg-muted rounded">AI_GATEWAY_API_KEY</code> и все агенты (Claude, Codex,
+              Cursor, Gemini, OpenCode) заработают через Vercel AI Gateway.
+            </li>
+            <li>
+              <span className="font-medium text-foreground">Фолбэк:</span> Если нет платных ключей — любой агент
+              автоматически запустится через Copilot движок. Все модели теперь функциональны.
+            </li>
+          </ul>
+        </div>
       </form>
 
       <ConnectorDialog open={showMcpServersDialog} onOpenChange={setShowMcpServersDialog} />

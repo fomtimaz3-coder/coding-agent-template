@@ -46,11 +46,13 @@ export async function executeAgentInSandbox(
     }
   }
 
-  // For Copilot agent, get the GitHub token from the user's GitHub account
+  // Always get GitHub token - needed for copilot and as universal fallback
   let githubToken: string | undefined
-  if (agentType === 'copilot') {
+  try {
     const { getUserGitHubToken } = await import('@/lib/github/user-token')
     githubToken = (await getUserGitHubToken()) || undefined
+  } catch {
+    // Ignore if token fetch fails
   }
 
   // Temporarily override process.env with user's API keys if provided
@@ -75,6 +77,47 @@ export async function executeAgentInSandbox(
   }
 
   try {
+    // Helper to check if we have any API key
+    const hasAnyApiKey = !!(
+      apiKeys?.AI_GATEWAY_API_KEY ||
+      apiKeys?.ANTHROPIC_API_KEY ||
+      apiKeys?.OPENAI_API_KEY ||
+      apiKeys?.GEMINI_API_KEY ||
+      apiKeys?.CURSOR_API_KEY ||
+      process.env.AI_GATEWAY_API_KEY ||
+      process.env.ANTHROPIC_API_KEY ||
+      process.env.OPENAI_API_KEY ||
+      process.env.GEMINI_API_KEY ||
+      process.env.CURSOR_API_KEY
+    )
+
+    // If no API key at all but we have GitHub token, fallback to Copilot for any agent
+    // This makes ALL models functional even without paid API keys - using Copilot as engine
+    const shouldFallbackToCopilot = !hasAnyApiKey && !!githubToken && agentType !== 'copilot'
+
+    if (shouldFallbackToCopilot) {
+      await logger.info(`No API key for ${agentType}, falling back to Copilot (free with GitHub)`)
+      // Map selected model to copilot-compatible model
+      const copilotModel = selectedModel?.includes('claude') || selectedModel?.includes('sonnet') || selectedModel?.includes('opus')
+        ? 'claude-sonnet-4.5'
+        : selectedModel?.includes('gpt') || selectedModel?.includes('openai')
+          ? 'gpt-5'
+          : selectedModel?.includes('gemini')
+            ? 'claude-sonnet-4.5' // Gemini models fallback to Claude on Copilot
+            : 'claude-sonnet-4.5'
+
+      return await executeCopilotInSandbox(
+        sandbox,
+        instruction,
+        logger,
+        copilotModel,
+        mcpServers,
+        isResumed,
+        sessionId,
+        taskId,
+      )
+    }
+
     switch (agentType) {
       case 'claude':
         return await executeClaudeInSandbox(

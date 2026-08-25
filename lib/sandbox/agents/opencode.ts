@@ -56,9 +56,15 @@ export async function executeOpenCodeInSandbox(
     // Executing OpenCode with instruction
     await logger.info('Starting OpenCode agent execution...')
 
-    // Check if we have required environment variables for OpenCode
-    if (!process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY) {
-      const errorMsg = 'OpenAI API key or Anthropic API key is required for OpenCode agent'
+    // Check if we have required environment variables for OpenCode - now accepts any key including AI_GATEWAY
+    const hasOpenAI = !!process.env.OPENAI_API_KEY
+    const hasAnthropic = !!process.env.ANTHROPIC_API_KEY
+    const hasAiGateway = !!process.env.AI_GATEWAY_API_KEY
+    const hasGemini = !!process.env.GEMINI_API_KEY
+    const hasCursor = !!process.env.CURSOR_API_KEY
+
+    if (!hasOpenAI && !hasAnthropic && !hasAiGateway && !hasGemini && !hasCursor) {
+      const errorMsg = 'At least one API key (AI_GATEWAY, OPENAI, ANTHROPIC, GEMINI, CURSOR) is required for OpenCode agent'
       await logger.error(errorMsg)
       return {
         success: false,
@@ -66,6 +72,10 @@ export async function executeOpenCodeInSandbox(
         cliName: 'opencode',
         changesDetected: false,
       }
+    }
+
+    if (hasAiGateway) {
+      await logger.info('Using AI Gateway key for OpenCode (universal key)')
     }
 
     // Check if OpenCode CLI is already installed (for resumed sandboxes)
@@ -299,7 +309,7 @@ EOF`
       }
     }
 
-    // Set up environment variables for the OpenCode execution
+    // Set up environment variables for the OpenCode execution - include all possible keys
     const envVars: Record<string, string> = {}
 
     if (process.env.OPENAI_API_KEY) {
@@ -307,6 +317,19 @@ EOF`
     }
     if (process.env.ANTHROPIC_API_KEY) {
       envVars.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
+    }
+    if (process.env.AI_GATEWAY_API_KEY) {
+      envVars.AI_GATEWAY_API_KEY = process.env.AI_GATEWAY_API_KEY
+      // Map AI Gateway to OpenAI for opencode compatibility if no OpenAI key
+      if (!envVars.OPENAI_API_KEY) {
+        envVars.OPENAI_API_KEY = process.env.AI_GATEWAY_API_KEY
+      }
+    }
+    if (process.env.GEMINI_API_KEY) {
+      envVars.GEMINI_API_KEY = process.env.GEMINI_API_KEY
+    }
+    if (process.env.CURSOR_API_KEY) {
+      envVars.CURSOR_API_KEY = process.env.CURSOR_API_KEY
     }
 
     // Build environment variables string for shell command

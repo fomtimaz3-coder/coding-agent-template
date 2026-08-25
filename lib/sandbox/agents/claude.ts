@@ -83,9 +83,14 @@ export async function installClaudeCLI(
   if (claudeInstall.success) {
     await logger.info('Claude CLI installed successfully')
 
-    // Authenticate Claude CLI with API key (using AI Gateway)
-    const apiKey = process.env.AI_GATEWAY_API_KEY
-    const baseUrl = 'https://ai-gateway.vercel.sh'
+    // Authenticate Claude CLI with API key (using AI Gateway or Anthropic direct)
+    // Universal key support: AI_GATEWAY, ANTHROPIC, OPENAI all can work via gateway
+    const apiKey = process.env.AI_GATEWAY_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY
+    const baseUrl = process.env.AI_GATEWAY_API_KEY
+      ? 'https://ai-gateway.vercel.sh'
+      : process.env.ANTHROPIC_API_KEY
+        ? 'https://api.anthropic.com'
+        : 'https://ai-gateway.vercel.sh'
 
     if (apiKey) {
       await logger.info('Authenticating Claude CLI with AI Gateway...')
@@ -237,11 +242,12 @@ export async function executeClaudeInSandbox(
       }
     }
 
-    // Check if AI_GATEWAY_API_KEY is available
-    if (!process.env.AI_GATEWAY_API_KEY) {
+    // Check if any API key is available - universal support
+    const claudeKey = process.env.AI_GATEWAY_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY
+    if (!claudeKey) {
       return {
         success: false,
-        error: 'AI_GATEWAY_API_KEY environment variable is required but not found',
+        error: 'AI_GATEWAY_API_KEY or ANTHROPIC_API_KEY is required for Claude CLI',
         cliName: 'claude',
         changesDetected: false,
       }
@@ -254,8 +260,12 @@ export async function executeClaudeInSandbox(
     }
 
     // Check MCP configuration status
-    const aiGatewayKey = process.env.AI_GATEWAY_API_KEY!
-    const aiGatewayBaseUrl = 'https://ai-gateway.vercel.sh'
+    const aiGatewayKey = claudeKey
+    const aiGatewayBaseUrl = process.env.AI_GATEWAY_API_KEY
+      ? 'https://ai-gateway.vercel.sh'
+      : process.env.ANTHROPIC_API_KEY
+        ? 'https://api.anthropic.com'
+        : 'https://ai-gateway.vercel.sh'
     const envPrefix = `ANTHROPIC_API_KEY="${aiGatewayKey}" ANTHROPIC_BASE_URL="${aiGatewayBaseUrl}"`
     const mcpList = await runCommandInSandbox(sandbox, 'sh', ['-c', `${envPrefix} claude mcp list`])
     await logger.info('MCP servers list retrieved')

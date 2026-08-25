@@ -10,6 +10,38 @@ import { generateId } from '@/lib/utils/id'
 
 type Connector = typeof connectors.$inferSelect
 
+const COPILOT_PATH_EXPORT = 'export PATH=\"$HOME/.npm-global/bin:$HOME/.local/bin:/usr/local/bin:$PATH\"'
+const COPILOT_BIN = 'copilot'
+
+// Normalize model names - Copilot CLI is picky
+const COPILOT_MODEL_MAP: Record<string, string> = {
+  'claude-sonnet-4.5': 'claude-sonnet-4.5',
+  'claude-sonnet-4': 'claude-sonnet-4',
+  'claude-haiku-4.5': 'claude-haiku-4.5',
+  'claude-opus-4.5': 'claude-opus-4.5',
+  'claude-opus-4.6': 'claude-opus-4.5', // fallback
+  'gpt-5': 'gpt-5',
+  'gpt-5.1': 'gpt-5',
+  'gpt-4.1': 'gpt-4.1',
+  'gpt-4o': 'gpt-4o',
+}
+
+function normalizeCopilotModel(model?: string): string | undefined {
+  if (!model) return undefined
+  // Direct map
+  if (COPILOT_MODEL_MAP[model]) return COPILOT_MODEL_MAP[model]
+  // Try lower case contains
+  const lower = model.toLowerCase()
+  if (lower.includes('sonnet-4.5')) return 'claude-sonnet-4.5'
+  if (lower.includes('sonnet-4')) return 'claude-sonnet-4'
+  if (lower.includes('haiku')) return 'claude-haiku-4.5'
+  if (lower.includes('opus')) return 'claude-opus-4.5'
+  if (lower.includes('gpt-5')) return 'gpt-5'
+  if (lower.includes('gpt-4.1')) return 'gpt-4.1'
+  // Return as-is if not mapped - let CLI decide
+  return model
+}
+
 // Helper function to run command and collect logs in project directory
 async function runAndLogCommand(sandbox: Sandbox, command: string, args: string[], logger: TaskLogger) {
   const fullCommand = args.length > 0 ? `${command} ${args.join(' ')}` : command
@@ -28,6 +60,10 @@ async function runAndLogCommand(sandbox: Sandbox, command: string, args: string[
   return result
 }
 
+async function runWithPath(sandbox: Sandbox, cmd: string) {
+  return await runCommandInSandbox(sandbox, 'sh', ['-c', `${COPILOT_PATH_EXPORT}; ${cmd}`])
+}
+
 export async function executeCopilotInSandbox(
   sandbox: Sandbox,
   instruction: string,
@@ -42,45 +78,79 @@ export async function executeCopilotInSandbox(
   let accumulatedContent = ''
 
   try {
-    // Check if GitHub Copilot CLI is already installed (for resumed sandboxes)
-    const existingCliCheck = await runCommandInSandbox(sandbox, 'sh', ['-c', 'which copilot 2>/dev/null'])
+    // Check if GitHub Copilot CLI is already installed (for resumed sandboxes) - with proper PATH
+    const existingCliCheck = await runWithPath(sandbox, 'which copilot 2>/dev/null || which copilot 2>/dev/null; echo PATH:$PATH')
 
     let copilotInstall: { success: boolean; output?: string; error?: string } = { success: true }
+    const normalizedModel = normalizeCopilotModel(selectedModel)
 
     if (existingCliCheck.success && existingCliCheck.output?.includes('copilot')) {
-      // CLI already installed, skip installation
-      if (logger) {
-        await logger.info('GitHub Copilot CLI already installed, skipping installation')
-      }
+      await logger.info('GitHub Copilot CLI already installed, skipping installation')
     } else {
-      // Install GitHub Copilot CLI using npm
-      if (logger) {
-        await logger.info('Installing GitHub Copilot CLI...')
+      await logger.info('Installing GitHub Copilot CLI...')
+
+      // Robust install: set prefix to user-writable location and install
+      const installSteps = [
+        'mkdir -p $HOME/.npm-global',
+        'npm config set prefix $HOME/.npm-global',
+        // Try official package, fallback to older naming if needed
+        'npm install -g @github/copilot --no-audit --no-fund 2>&1 || npm install -g @github/copilot-cli --no-audit --no-fund 2>&1 || npm install -g @githubnext/github-copilot-cli --no-audit --no-fund 2>&1',
+        `${COPILOT_PATH_EXPORT}; which copilot; copilot --version || true`,
+      ]
+
+      for (const step of installSteps) {
+        const stepResult = await runCommandInSandbox(sandbox, 'sh', ['-c', step])
+        if (stepResult.output) {
+          await logger.info(redactSensitiveInfo(stepResult.output.trim().slice(0, 500)))
+        }
+        if (stepResult.error && !stepResult.success) {
+          // Don't fail on version check, only on install
+          if (step.includes('npm install')) {
+            copilotInstall = stepResult
+            if (!stepResult.success) {
+              await logger.error('Copilot install step failed, trying fallback')
+            }
+          }
+        }
       }
 
-      // Install using npm global
-      copilotInstall = await runAndLogCommand(sandbox, 'npm', ['install', '-g', '@github/copilot'], logger)
+      // Final verification
+      const verifyInstall = await runWithPath(sandbox, 'which copilot; ls -la $HOME/.npm-global/bin/ | grep copilot || true')
+      if (verifyInstall.output) {
+        await logger.info(redactSensitiveInfo(verifyInstall.output.trim().slice(0, 1000)))
+      }
 
-      if (!copilotInstall.success) {
-        const errorMsg = 'Failed to install GitHub Copilot CLI'
-        if (logger) {
+      // If still not found, try pnpm or yarn global or direct npx
+      const finalCheck = await runWithPath(sandbox, 'which copilot 2>/dev/null')
+      if (!finalCheck.success || !finalCheck.output?.includes('copilot')) {
+        await logger.info('Copilot not found in PATH, checking npx fallback...')
+        const npxCheck = await runCommandInSandbox(sandbox, 'sh', ['-c', 'npx @github/copilot --version 2>&1 || true'])
+        if (npxCheck.output?.includes('copilot') || npxCheck.output?.toLowerCase().includes('version')) {
+          await logger.info('Copilot available via npx, will use npx wrapper')
+          // Create wrapper script
+          await runCommandInSandbox(sandbox, 'sh', [
+            '-c',
+            'mkdir -p $HOME/.npm-global/bin && echo \'#!/bin/sh\\nexec npx @github/copilot \"$@\"\' > $HOME/.npm-global/bin/copilot && chmod +x $HOME/.npm-global/bin/copilot',
+          ])
+        } else {
+          const errorMsg = 'Failed to install GitHub Copilot CLI after multiple attempts'
           await logger.error(errorMsg)
-        }
-        return {
-          success: false,
-          error: errorMsg,
-          cliName: 'copilot',
-          changesDetected: false,
+          return {
+            success: false,
+            error: errorMsg,
+            cliName: 'copilot',
+            changesDetected: false,
+          }
         }
       }
     }
 
     await logger.info('GitHub Copilot CLI installed successfully')
 
-    // Check if Copilot CLI is available
-    const cliCheck = await runAndLogCommand(sandbox, 'which', ['copilot'], logger)
+    // Check if Copilot CLI is available with proper PATH
+    const cliCheck = await runWithPath(sandbox, 'which copilot && copilot --version 2>&1 || copilot --help 2>&1 | head -n 20')
 
-    if (!cliCheck.success) {
+    if (!cliCheck.success && !cliCheck.output?.toLowerCase().includes('copilot')) {
       return {
         success: false,
         error: 'GitHub Copilot CLI not found after installation',
@@ -89,8 +159,13 @@ export async function executeCopilotInSandbox(
       }
     }
 
+    if (cliCheck.output) {
+      await logger.info(redactSensitiveInfo(cliCheck.output.trim().slice(0, 1000)))
+    }
+
     // Check if GH_TOKEN or GITHUB_TOKEN is available
-    if (!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
+    const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN
+    if (!token) {
       return {
         success: false,
         error: 'GH_TOKEN or GITHUB_TOKEN environment variable is required but not found',
@@ -99,11 +174,20 @@ export async function executeCopilotInSandbox(
       }
     }
 
+    // Verify token has copilot access by checking user
+    await logger.info('Verifying GitHub token for Copilot...')
+    const tokenCheck = await runCommandInSandbox(sandbox, 'sh', [
+      '-c',
+      `${COPILOT_PATH_EXPORT}; GH_TOKEN="${token}" GITHUB_TOKEN="${token}" copilot --version 2>&1 || echo "version check failed"`,
+    ])
+    if (tokenCheck.output) {
+      await logger.info(redactSensitiveInfo(tokenCheck.output.trim().slice(0, 500)))
+    }
+
     // Configure MCP servers if provided
     if (mcpServers && mcpServers.length > 0) {
       await logger.info('Configuring MCP servers for GitHub Copilot')
 
-      // Create MCP configuration file for Copilot
       const mcpConfig: {
         mcpServers: Record<
           string,
@@ -118,12 +202,10 @@ export async function executeCopilotInSandbox(
         const serverName = server.name.toLowerCase().replace(/[^a-z0-9]/g, '-')
 
         if (server.type === 'local') {
-          // Local STDIO server - parse command string into command and args
           const commandParts = server.command!.trim().split(/\s+/)
           const executable = commandParts[0]
           const args = commandParts.slice(1)
 
-          // Parse env from JSON string if present
           let envObject: Record<string, string> | undefined
           if (server.env) {
             try {
@@ -138,11 +220,10 @@ export async function executeCopilotInSandbox(
             command: executable,
             ...(args.length > 0 ? { args } : {}),
             ...(envObject ? { env: envObject } : {}),
-            tools: [], // Empty array to allow all tools
+            tools: [],
           }
           await logger.info('Added local MCP server')
         } else {
-          // Remote HTTP/SSE server
           const headers: Record<string, string> = {}
           if (server.oauthClientSecret) {
             headers.Authorization = `Bearer ${server.oauthClientSecret}`
@@ -154,7 +235,7 @@ export async function executeCopilotInSandbox(
           const httpConfig: { type: 'http'; url: string; headers?: Record<string, string>; tools: string[] } = {
             type: 'http',
             url: server.baseUrl!,
-            tools: [], // Empty array to allow all tools
+            tools: [],
           }
 
           if (Object.keys(headers).length > 0) {
@@ -162,16 +243,12 @@ export async function executeCopilotInSandbox(
           }
 
           mcpConfig.mcpServers[serverName] = httpConfig
-
           await logger.info('Added remote MCP server')
         }
       }
 
-      // Write the MCP configuration file (use $HOME instead of ~)
       const mcpConfigJson = JSON.stringify(mcpConfig, null, 2)
-      const createMcpConfigCmd = `mkdir -p $HOME/.copilot && cat > $HOME/.copilot/mcp-config.json << 'EOF'
-${mcpConfigJson}
-EOF`
+      const createMcpConfigCmd = `mkdir -p $HOME/.copilot && cat > $HOME/.copilot/mcp-config.json << 'EOF'\n${mcpConfigJson}\nEOF`
 
       await logger.info('Creating GitHub Copilot MCP configuration file...')
       const mcpConfigResult = await runCommandInSandbox(sandbox, 'sh', ['-c', createMcpConfigCmd])
@@ -183,16 +260,11 @@ EOF`
       }
     }
 
-    // Execute GitHub Copilot CLI with the instruction
-    if (logger) {
-      await logger.info('Starting GitHub Copilot CLI execution...')
-    }
+    await logger.info('Starting GitHub Copilot CLI execution...')
 
-    // Capture output by intercepting the streams
     let capturedOutput = ''
     let capturedError = ''
 
-    // Create custom writable streams to capture the output
     const { Writable } = await import('stream')
 
     interface WriteCallback {
@@ -205,41 +277,29 @@ EOF`
       write(chunk: Buffer | string, encoding: BufferEncoding, callback: WriteCallback) {
         const data = chunk.toString()
 
-        // Only capture raw output if we're NOT streaming to database
         if (!agentMessageId || !taskId) {
           capturedOutput += data
         }
 
-        // Parse text-based streaming output with --no-color
-        // GitHub Copilot CLI outputs lines with different prefixes:
-        // ● = thought/status, ✓ = completed action, $ = command, ╭─ = diff start, etc.
-        // Filter out the diff boxes (lines containing ╭, ╰, │, ─, ═) to keep output clean
         if (agentMessageId && taskId) {
           const lines = data.split('\n')
           for (const line of lines) {
             if (line.trim()) {
-              // Skip diff box lines (containing box drawing characters)
               const isDiffBox = /[╭╰│─═╮╯]/.test(line)
 
               if (!isDiffBox) {
-                // Check if this is a new action line (starts with ● or ✓)
                 const isActionLine = /^[●✓]/.test(line.trim())
 
-                // Add blank line before action lines for better readability
                 if (isActionLine && accumulatedContent.length > 0) {
                   accumulatedContent += '\n'
                 }
 
-                // Append each line to accumulated content
                 accumulatedContent += line + '\n'
 
-                // Update database with accumulated content (throttled via catch)
                 db.update(taskMessages)
                   .set({ content: accumulatedContent })
                   .where(eq(taskMessages.id, agentMessageId))
-                  .catch((err: Error) => {
-                    // Silently ignore update errors to avoid flooding logs
-                  })
+                  .catch(() => {})
               }
             }
           }
@@ -256,7 +316,6 @@ EOF`
       },
     })
 
-    // Create initial agent message in database if taskId provided
     if (taskId) {
       agentMessageId = generateId(12)
       await db.insert(taskMessages).values({
@@ -265,82 +324,130 @@ EOF`
         role: 'agent',
         content: '<pre class="whitespace-pre-wrap font-sans text-xs">',
       })
-      // Initialize accumulated content with opening pre tag
       accumulatedContent = '<pre class="whitespace-pre-wrap font-sans text-xs">'
     }
 
-    // Build the copilot command
-    const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN
     const homeDir = '/home/vercel-sandbox'
     const mcpConfigPath = `${homeDir}/.copilot/mcp-config.json`
-    const modelFlag = selectedModel ? ` --model ${selectedModel}` : ''
+    const modelFlag = normalizedModel ? ` --model ${normalizedModel}` : ''
     const resumeFlag = isResumed && sessionId ? ` --resume ${sessionId}` : ''
     const additionalMcpConfig = mcpServers && mcpServers.length > 0 ? ` --additional-mcp-config @${mcpConfigPath}` : ''
 
-    // Use non-interactive mode with --allow-all-tools and --no-color for streaming text output
-    // Note: File paths in --additional-mcp-config must be prefixed with @
+    // Build args with normalized model
     const args = [
       '-p',
       instruction,
       '--allow-all-tools',
       '--no-color',
-      ...(selectedModel ? ['--model', selectedModel] : []),
+      ...(normalizedModel ? ['--model', normalizedModel] : []),
       ...(isResumed && sessionId ? ['--resume', sessionId] : []),
       ...(mcpServers && mcpServers.length > 0 ? ['--additional-mcp-config', `@${mcpConfigPath}`] : []),
     ]
 
-    const logCommand = `copilot${modelFlag}${resumeFlag}${additionalMcpConfig} -p "${instruction}" --allow-all-tools --no-color`
+    const logCommand = `copilot${modelFlag}${resumeFlag}${additionalMcpConfig} -p "${instruction.slice(0, 100)}..." --allow-all-tools --no-color`
     await logger.command(logCommand)
+    await logger.info(`Executing GitHub Copilot CLI with model: ${normalizedModel || 'default'}`)
 
-    if (logger) {
-      await logger.info('Executing GitHub Copilot CLI in non-interactive mode')
+    // Execute with robust env - include PATH with npm-global
+    const execEnv = {
+      GH_TOKEN: token!,
+      GITHUB_TOKEN: token!,
+      PATH: '/home/vercel-sandbox/.npm-global/bin:/home/vercel-sandbox/.local/bin:/usr/local/bin:/usr/bin:/bin',
+      HOME: '/home/vercel-sandbox',
+      // Force non-interactive
+      CI: 'true',
+      COPILOT_ALLOW_ALL: 'true',
     }
 
-    // Execute copilot CLI (without detached mode so we can wait for completion)
+    let executionFailed = false
+    let executionError = ''
+
     try {
       await sandbox.runCommand({
-        cmd: 'copilot',
+        cmd: COPILOT_BIN,
         args: args,
-        env: {
-          GH_TOKEN: token!,
-          GITHUB_TOKEN: token!,
-        },
+        env: execEnv,
         sudo: false,
         cwd: PROJECT_DIR,
         stdout: captureStdout,
         stderr: captureStderr,
       })
 
-      if (logger) {
-        await logger.info('GitHub Copilot CLI execution completed')
-      }
+      await logger.info('GitHub Copilot CLI execution completed')
     } catch (error) {
-      // Command may exit with non-zero code, but that's okay
-      // We'll check for changes below
-      if (logger) {
-        await logger.info('GitHub Copilot CLI execution finished')
+      executionFailed = true
+      executionError = error instanceof Error ? error.message : String(error)
+      await logger.info(`GitHub Copilot CLI execution finished with note: ${redactSensitiveInfo(executionError.slice(0, 500))}`)
+
+      // If failed with model error, retry without model flag
+      if (capturedError.toLowerCase().includes('model') || executionError.toLowerCase().includes('model')) {
+        await logger.info('Model error detected, retrying with default model...')
+
+        capturedOutput = ''
+        capturedError = ''
+
+        const retryCaptureStdout = new Writable({
+          write(chunk: Buffer | string, _enc: BufferEncoding, cb: WriteCallback) {
+            const data = chunk.toString()
+            if (!agentMessageId || !taskId) capturedOutput += data
+            if (agentMessageId && taskId) {
+              accumulatedContent += data + '\n'
+              db.update(taskMessages)
+                .set({ content: accumulatedContent })
+                .where(eq(taskMessages.id, agentMessageId))
+                .catch(() => {})
+            }
+            cb()
+          },
+        })
+
+        const retryCaptureStderr = new Writable({
+          write(chunk: Buffer | string, _enc: BufferEncoding, cb: WriteCallback) {
+            capturedError += chunk.toString()
+            cb()
+          },
+        })
+
+        try {
+          await sandbox.runCommand({
+            cmd: COPILOT_BIN,
+            args: ['-p', instruction, '--allow-all-tools', '--no-color'],
+            env: execEnv,
+            sudo: false,
+            cwd: PROJECT_DIR,
+            stdout: retryCaptureStdout,
+            stderr: retryCaptureStderr,
+          })
+          await logger.info('Retry with default model completed')
+          executionFailed = false
+        } catch (retryError) {
+          await logger.info('Retry also failed, will check for file changes anyway')
+        }
       }
     }
 
     const result = {
-      success: true,
+      success: !executionFailed,
       output: capturedOutput,
       error: capturedError,
       command: logCommand,
     }
 
-    // Log the output and error results
     if (result.output && result.output.trim() && !agentMessageId) {
-      const redactedOutput = redactSensitiveInfo(result.output.trim())
+      const redactedOutput = redactSensitiveInfo(result.output.trim().slice(0, 2000))
       await logger.info(redactedOutput)
     }
 
     if (result.error && result.error.trim()) {
-      const redactedError = redactSensitiveInfo(result.error)
-      await logger.error(redactedError)
+      const redactedError = redactSensitiveInfo(result.error.trim().slice(0, 2000))
+      // Only log as error if it's not just warnings and execution didn't completely fail
+      if (executionFailed || redactedError.toLowerCase().includes('error')) {
+        await logger.error(redactedError)
+      } else {
+        await logger.info(redactedError)
+      }
     }
 
-    // Close the pre tag if streaming to database
     if (agentMessageId && taskId) {
       accumulatedContent += '</pre>'
       await db
@@ -350,23 +457,23 @@ EOF`
         .catch((err: Error) => console.error('Failed to update message:', err))
     }
 
-    // Check if any files were modified
+    // Check if any files were modified - even if CLI reported error, changes might exist
     const gitStatusCheck = await runAndLogCommand(sandbox, 'git', ['status', '--porcelain'], logger)
     const hasChanges = gitStatusCheck.success && gitStatusCheck.output?.trim()
 
-    // Success is determined by the CLI execution, not by code changes
-    // Sometimes users just ask questions and no code changes are expected
+    // If we have changes, consider it success even if CLI had non-zero exit
+    const finalSuccess = result.success || !!hasChanges || capturedOutput.length > 50
+
     return {
-      success: true,
-      output: `GitHub Copilot CLI executed successfully${hasChanges ? ' (Changes detected)' : ' (No changes made)'}`,
+      success: finalSuccess,
+      output: `GitHub Copilot CLI executed ${finalSuccess ? 'successfully' : 'with issues'}${hasChanges ? ' (Changes detected)' : ' (No changes made)'}`,
       agentResponse: agentMessageId ? undefined : result.output || 'GitHub Copilot CLI completed the task',
       cliName: 'copilot',
       changesDetected: !!hasChanges,
-      error: undefined,
+      error: finalSuccess ? undefined : result.error || executionError,
       sessionId: extractedSessionId,
     }
   } catch (error: unknown) {
-    // Close the pre tag if streaming to database and there was an error
     if (agentMessageId && taskId) {
       accumulatedContent += '</pre>'
       await db

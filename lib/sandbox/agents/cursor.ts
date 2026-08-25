@@ -166,14 +166,23 @@ export async function executeCursorInSandbox(
       }
     }
 
-    // Check if CURSOR_API_KEY is available
-    if (!process.env.CURSOR_API_KEY) {
+    // Check if any API key is available - AI_GATEWAY is universal now
+    const hasCursorKey = !!process.env.CURSOR_API_KEY
+    const hasAiGateway = !!process.env.AI_GATEWAY_API_KEY
+    const hasAnthropic = !!process.env.ANTHROPIC_API_KEY
+    const hasOpenAI = !!process.env.OPENAI_API_KEY
+
+    if (!hasCursorKey && !hasAiGateway && !hasAnthropic && !hasOpenAI) {
       return {
         success: false,
-        error: 'CURSOR_API_KEY not found. Please set the API key to use Cursor agent.',
+        error: 'No API key found. Please set CURSOR_API_KEY or AI_GATEWAY_API_KEY to use Cursor agent.',
         cliName: 'cursor',
         changesDetected: false,
       }
+    }
+
+    if (hasAiGateway && !hasCursorKey) {
+      await logger.info('Using AI Gateway key for Cursor agent')
     }
 
     // Configure MCP servers if provided
@@ -458,12 +467,23 @@ EOF`
     }
     args.push(instruction)
 
+    // Build env with fallback to AI Gateway
+    const cursorEnv: Record<string, string> = {}
+    if (process.env.CURSOR_API_KEY) cursorEnv.CURSOR_API_KEY = process.env.CURSOR_API_KEY
+    if (process.env.AI_GATEWAY_API_KEY) {
+      cursorEnv.AI_GATEWAY_API_KEY = process.env.AI_GATEWAY_API_KEY
+      // Cursor agent can also use ANTHROPIC_API_KEY via gateway
+      if (!cursorEnv.CURSOR_API_KEY) {
+        cursorEnv.CURSOR_API_KEY = process.env.AI_GATEWAY_API_KEY
+      }
+    }
+    if (process.env.ANTHROPIC_API_KEY) cursorEnv.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
+    if (process.env.OPENAI_API_KEY) cursorEnv.OPENAI_API_KEY = process.env.OPENAI_API_KEY
+
     await sandbox.runCommand({
       cmd: '/home/vercel-sandbox/.local/bin/cursor-agent',
       args: args,
-      env: {
-        CURSOR_API_KEY: process.env.CURSOR_API_KEY!,
-      },
+      env: cursorEnv,
       sudo: false,
       detached: true,
       cwd: PROJECT_DIR,

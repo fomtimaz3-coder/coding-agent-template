@@ -75,38 +75,26 @@ export async function executeCodexInSandbox(
       }
     }
 
-    // Set up authentication - we'll use API key method since we're in a sandbox
-    if (!process.env.AI_GATEWAY_API_KEY) {
+    // Set up authentication - universal key support: AI_GATEWAY, OPENAI, ANTHROPIC all work
+    const rawApiKey = process.env.AI_GATEWAY_API_KEY || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY
+    if (!rawApiKey) {
       return {
         success: false,
-        error: 'AI Gateway API key not found. Please set AI_GATEWAY_API_KEY environment variable.',
+        error: 'No API key found. Set AI_GATEWAY_API_KEY or OPENAI_API_KEY for Codex CLI.',
         cliName: 'codex',
         changesDetected: false,
       }
     }
 
-    // Validate API key format - can be either OpenAI (sk-) or Vercel (vck_)
-    const apiKey = process.env.AI_GATEWAY_API_KEY
+    // Normalize key type - accept vck_, sk-, and any other format via gateway
+    const apiKey = rawApiKey
     const isOpenAIKey = apiKey?.startsWith('sk-')
     const isVercelKey = apiKey?.startsWith('vck_')
-
-    if (!apiKey || (!isOpenAIKey && !isVercelKey)) {
-      const errorMsg = `Invalid API key format. Expected to start with "sk-" (OpenAI) or "vck_" (Vercel), but got: "${apiKey?.substring(0, 15) || 'undefined'}"`
-
-      if (logger) {
-        await logger.error(errorMsg)
-      }
-      return {
-        success: false,
-        error: errorMsg,
-        cliName: 'codex',
-        changesDetected: false,
-      }
-    }
+    const isAnthropicKey = apiKey?.startsWith('sk-ant-')
 
     if (logger) {
-      const keyType = isVercelKey ? 'Vercel AI Gateway' : 'OpenAI'
-      await logger.info('Using API key for authentication')
+      const keyType = isVercelKey ? 'Vercel AI Gateway' : isOpenAIKey ? 'OpenAI' : isAnthropicKey ? 'Anthropic (via gateway)' : 'Custom Gateway'
+      await logger.info(`Using ${keyType} API key for Codex authentication`)
     }
 
     // According to the official Codex CLI docs, we should use 'exec' for non-interactive execution
@@ -304,7 +292,8 @@ url = "${server.baseUrl}"
 
     // Use the same pattern as other working agents (Claude, etc.)
     // Execute with environment variables using sh -c like Claude does
-    const envPrefix = `AI_GATEWAY_API_KEY="${process.env.AI_GATEWAY_API_KEY}" HOME="/home/vercel-sandbox" CI="true"`
+    const gatewayKey = process.env.AI_GATEWAY_API_KEY || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY
+    const envPrefix = `AI_GATEWAY_API_KEY="${gatewayKey}" OPENAI_API_KEY="${process.env.OPENAI_API_KEY || gatewayKey}" ANTHROPIC_API_KEY="${process.env.ANTHROPIC_API_KEY || ""}" HOME="/home/vercel-sandbox" CI="true"`
     const fullCommand = `${envPrefix} ${codexCommand} "${instruction}"`
 
     // Use the standard runInProject helper like other agents

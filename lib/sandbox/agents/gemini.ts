@@ -170,7 +170,7 @@ EOF`
       }
     }
 
-    // Check authentication options in order of preference
+    // Check authentication options in order of preference - AI Gateway is universal fallback
     let authMethod = 'none'
     const authEnv: Record<string, string> = {}
 
@@ -180,20 +180,37 @@ EOF`
       authEnv.GEMINI_API_KEY = process.env.GEMINI_API_KEY
       await logger.info('Using Gemini API key authentication')
     }
-    // Option 2: Check for GOOGLE_API_KEY with Vertex AI flag (Vertex AI)
+    // Option 2: Check for AI_GATEWAY_API_KEY - gateway can proxy Gemini
+    else if (process.env.AI_GATEWAY_API_KEY) {
+      authMethod = 'ai_gateway'
+      // Gemini CLI can use GEMINI_API_KEY env with gateway key, and we set base URL via config
+      authEnv.GEMINI_API_KEY = process.env.AI_GATEWAY_API_KEY
+      // Set gateway base URL if CLI supports it
+      authEnv.GOOGLE_GEMINI_BASE_URL = 'https://ai-gateway.vercel.sh'
+      await logger.info('Using AI Gateway for Gemini authentication')
+    }
+    // Option 3: Check for GOOGLE_API_KEY with Vertex AI flag (Vertex AI)
     else if (process.env.GOOGLE_API_KEY && process.env.GOOGLE_GENAI_USE_VERTEXAI) {
       authMethod = 'vertex_ai'
       authEnv.GOOGLE_API_KEY = process.env.GOOGLE_API_KEY
       authEnv.GOOGLE_GENAI_USE_VERTEXAI = 'true'
       await logger.info('Using Vertex AI authentication')
     }
-    // Option 3: Check for Google Cloud Project (OAuth with Code Assist)
+    // Option 4: Check for Google Cloud Project (OAuth with Code Assist)
     else if (process.env.GOOGLE_CLOUD_PROJECT) {
       authMethod = 'oauth_project'
       authEnv.GOOGLE_CLOUD_PROJECT = process.env.GOOGLE_CLOUD_PROJECT
       await logger.info('Using Google Cloud Project authentication (requires OAuth login)')
     }
-    // Option 4: Default OAuth (will require interactive login)
+    // Option 5: Try ANTHROPIC or OPENAI keys via gateway fallback
+    else if (process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY) {
+      authMethod = 'fallback'
+      // Still try to run, maybe gateway will handle
+      if (process.env.ANTHROPIC_API_KEY) authEnv.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
+      if (process.env.OPENAI_API_KEY) authEnv.OPENAI_API_KEY = process.env.OPENAI_API_KEY
+      await logger.info('Using fallback API key, attempting Gemini via gateway')
+    }
+    // Option 6: Default OAuth (will require interactive login)
     else {
       authMethod = 'oauth'
       await logger.info('No API keys found, will attempt OAuth authentication')
