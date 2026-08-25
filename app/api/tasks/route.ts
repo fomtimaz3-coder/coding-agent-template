@@ -600,6 +600,7 @@ async function processTask(
       undefined, // sessionId
       taskId, // taskId for streaming updates
       agentMessageId, // agentMessageId for streaming updates
+      githubToken || undefined, // preserve token for background execution
     )
 
     console.log('Agent execution completed')
