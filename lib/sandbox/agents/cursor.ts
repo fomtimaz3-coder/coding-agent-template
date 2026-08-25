@@ -63,13 +63,13 @@ export async function executeCursorInSandbox(
     const existingCliCheck = await runCommandInSandbox(
       sandbox,
       'sh',
-      ['-c', 'export PATH="$HOME/.local/bin:$PATH"; which cursor-agent 2>/dev/null'],
+      ['-c', 'export PATH="$HOME/.local/bin:$PATH"; which agent 2>/dev/null'],
       // Don't log this check to avoid cluttering logs
     )
 
     let cursorInstall: { success: boolean; output?: string; error?: string } = { success: true }
 
-    if (existingCliCheck.success && existingCliCheck.output?.includes('cursor-agent')) {
+    if (existingCliCheck.success && existingCliCheck.output?.includes('agent')) {
       // CLI already installed, skip installation
       if (logger) {
         await logger.info('Cursor CLI already installed, skipping installation')
@@ -93,8 +93,8 @@ export async function executeCursorInSandbox(
       const postInstallChecks = [
         'ls -la ~/.local/bin/ 2>/dev/null || echo "No ~/.local/bin directory"',
         'echo "Current PATH: $PATH"',
-        'export PATH="$HOME/.local/bin:$PATH"; which cursor-agent || echo "cursor-agent not found even with updated PATH"',
-        'export PATH="$HOME/.local/bin:$PATH"; cursor-agent --version || echo "cursor-agent version check failed"',
+        'export PATH="$HOME/.local/bin:$PATH"; which agent || echo "agent not found even with updated PATH"',
+        'export PATH="$HOME/.local/bin:$PATH"; agent --version || echo "agent version check failed"',
       ]
 
       for (const checkCmd of postInstallChecks) {
@@ -133,14 +133,14 @@ export async function executeCursorInSandbox(
     const cliCheck = await runAndLogCommandRoot(
       sandbox,
       'sh',
-      ['-c', 'export PATH="$HOME/.local/bin:$PATH"; which cursor-agent'],
+      ['-c', 'export PATH="$HOME/.local/bin:$PATH"; which agent'],
       logger,
     )
 
     if (!cliCheck.success) {
-      // Try to find where cursor-agent might be installed
+      // Try to find where agent might be installed
       if (logger) {
-        await logger.info('cursor-agent not found in PATH, searching for it...')
+        await logger.info('agent not found in PATH, searching for it...')
       }
 
       const searchPaths = [
@@ -160,7 +160,7 @@ export async function executeCursorInSandbox(
 
       return {
         success: false,
-        error: 'Cursor CLI (cursor-agent) not found after installation. Check logs for search results.',
+        error: 'Cursor CLI (agent) not found after installation. Check logs for search results.',
         cliName: 'cursor',
         changesDetected: false,
       }
@@ -251,7 +251,7 @@ EOF`
         await logger.info('MCP configuration file (~/.cursor/mcp.json) created successfully')
 
         // Verify the file was created (without logging sensitive contents)
-        const verifyMcpConfig = await runCommandInSandbox(sandbox, 'test', ['-f', '~/.cursor/mcp.json'])
+        const verifyMcpConfig = await runCommandInSandbox(sandbox, 'sh', ['-c', 'test -f ~/.cursor/mcp.json'])
         if (verifyMcpConfig.success) {
           await logger.info('MCP configuration verified')
         }
@@ -265,31 +265,31 @@ EOF`
       await logger.info('Starting Cursor CLI execution with instruction...')
     }
 
-    // Debug: Check if cursor-agent is still available right before execution
+    // Debug: Check if agent is still available right before execution
     const preExecCheck = await runAndLogCommandRoot(
       sandbox,
       'sh',
-      ['-c', 'export PATH="$HOME/.local/bin:$PATH"; which cursor-agent'],
+      ['-c', 'export PATH="$HOME/.local/bin:$PATH"; which agent'],
       logger,
     )
     if (logger) {
-      await logger.info('Pre-execution cursor-agent check completed')
+      await logger.info('Pre-execution agent check completed')
       if (preExecCheck.output) {
-        await logger.info('cursor-agent location found')
+        await logger.info('agent location found')
       }
     }
 
     // Use the correct flags: -p for print mode (non-interactive), --force for file modifications
-    // Try multiple approaches to find and execute cursor-agent
+    // Try multiple approaches to find and execute agent
 
     // Log what we're about to execute
     const modelFlag = selectedModel ? ` --model ${selectedModel}` : ''
     const resumeFlag = isResumed && sessionId ? ` --resume ${sessionId}` : ''
-    const logCommand = `cursor-agent -p --force --output-format stream-json${modelFlag}${resumeFlag} "${instruction}"`
+    const logCommand = `agent -p --force --output-format stream-json${modelFlag}${resumeFlag} "${instruction}"`
     if (logger) {
       await logger.command(logCommand)
       if (selectedModel) {
-        await logger.info('Executing cursor-agent with model')
+        await logger.info('Executing agent with model')
       }
       if (isResumed) {
         if (sessionId) {
@@ -298,12 +298,12 @@ EOF`
           await logger.info('Resuming previous conversation')
         }
       }
-      await logger.info('Executing cursor-agent directly without shell wrapper')
+      await logger.info('Executing agent directly without shell wrapper')
     }
 
-    // Execute cursor-agent using the proper Vercel Sandbox API with environment variables
+    // Execute agent using the proper Vercel Sandbox API with environment variables
     if (logger) {
-      await logger.info('Executing cursor-agent with proper environment variables via Sandbox API')
+      await logger.info('Executing agent with proper environment variables via Sandbox API')
     }
 
     // Capture output by intercepting the streams
@@ -459,7 +459,7 @@ EOF`
     args.push(instruction)
 
     await sandbox.runCommand({
-      cmd: '/home/vercel-sandbox/.local/bin/cursor-agent',
+      cmd: '/home/vercel-sandbox/.local/bin/agent',
       args: args,
       env: {
         CURSOR_API_KEY: process.env.CURSOR_API_KEY!,
