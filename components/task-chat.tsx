@@ -510,7 +510,21 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
         await fetchRateLimit()
         // Message was sent successfully, keep it cleared
       } else {
-        toast.error(data.error || 'Failed to send message')
+        if (response.status === 429) {
+          if (data.resetAt) {
+            setRateLimit({
+              remaining: data.remaining ?? 0,
+              total: data.total ?? rateLimit?.total ?? 0,
+              resetAt: data.resetAt,
+            })
+          }
+          const resetText = data.resetAt
+            ? ' Сброс: ' + new Date(data.resetAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) + '.'
+            : ''
+          toast.error('Дневной лимит исчерпан.' + resetText)
+        } else {
+          toast.error(data.error || 'Failed to send message')
+        }
         setNewMessage(messageToSend) // Restore the message on error
       }
     } catch (err) {
@@ -562,7 +576,21 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
         // Refresh messages to show the new user message without loading state
         await fetchMessages(false)
       } else {
-        toast.error(data.error || 'Failed to resend message')
+        if (response.status === 429) {
+          if (data.resetAt) {
+            setRateLimit({
+              remaining: data.remaining ?? 0,
+              total: data.total ?? rateLimit?.total ?? 0,
+              resetAt: data.resetAt,
+            })
+          }
+          const resetText = data.resetAt
+            ? ' Сброс: ' + new Date(data.resetAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) + '.'
+            : ''
+          toast.error('Дневной лимит исчерпан.' + resetText)
+        } else {
+          toast.error(data.error || 'Failed to resend message')
+        }
       }
     } catch (err) {
       console.error('Error resending message:', err)
@@ -1295,6 +1323,19 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
       {/* Input Area (only for chat tab) */}
       {activeTab === 'chat' && (
         <div className="flex-shrink-0 px-3 pb-3">
+          {rateLimit && (
+            <div
+              className={
+                rateLimit.remaining === 0
+                  ? 'mb-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive'
+                  : 'mb-2 rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-700 dark:text-yellow-300'
+              }
+            >
+              {rateLimit.remaining === 0
+                ? 'Лимит исчерпан. Сброс: ' + new Date(rateLimit.resetAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })
+                : 'Осталось сообщений: ' + rateLimit.remaining + ' из ' + rateLimit.total + '. Сброс: ' + new Date(rateLimit.resetAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+            </div>
+          )}
           <div className="relative">
             <Textarea
               value={newMessage}
