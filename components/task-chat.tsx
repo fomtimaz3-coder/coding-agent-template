@@ -575,6 +575,7 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
       if (response.ok) {
         // Refresh messages to show the new user message without loading state
         await fetchMessages(false)
+        await fetchRateLimit()
       } else {
         if (response.status === 429) {
           if (data.resetAt) {
@@ -1328,7 +1329,9 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
               className={
                 rateLimit.remaining === 0
                   ? 'mb-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive'
-                  : 'mb-2 rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-700 dark:text-yellow-300'
+                  : rateLimit.remaining === 1
+                    ? 'mb-2 rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-700 dark:text-yellow-300'
+                    : 'mb-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground'
               }
             >
               {rateLimit.remaining === 0
