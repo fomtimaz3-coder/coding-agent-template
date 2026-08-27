@@ -1,7 +1,12 @@
 import { db } from '@/lib/db/client'
 import { tasks } from '@/lib/db/schema'
-import { eq } from 'drizzle-orm'
+import { eq, and, notInArray } from 'drizzle-orm'
 import { createInfoLog, createCommandLog, createErrorLog, createSuccessLog, LogEntry } from './logging'
+import type { StructuredSandboxError } from './sandbox-errors'
+import { formatStructuredError } from './sandbox-errors'
+
+/** Statuses that must not be overwritten by a later update (atomic terminal states) */
+const TERMINAL_STATUSES = ['completed', 'error', 'stopped'] as const
 
 export class TaskLogger {
   private taskId: string
@@ -15,7 +20,6 @@ export class TaskLogger {
    */
   async append(type: 'info' | 'command' | 'error' | 'success', message: string): Promise<void> {
     try {
-      // Create the log entry with timestamp
       let logEntry: LogEntry
       switch (type) {
         case 'info':
@@ -34,11 +38,9 @@ export class TaskLogger {
           logEntry = createInfoLog(message)
       }
 
-      // Get current task to preserve existing logs
       const currentTask = await db.select().from(tasks).where(eq(tasks.id, this.taskId)).limit(1)
       const existingLogs = currentTask[0]?.logs || []
 
-      // Append the new log entry
       await db
         .update(tasks)
         .set({
@@ -46,17 +48,11 @@ export class TaskLogger {
           updatedAt: new Date(),
         })
         .where(eq(tasks.id, this.taskId))
-
-      // Task log: ${type.toUpperCase()}: ${message.substring(0, 100)}
     } catch {
-      // Failed to append log to database
-      // Don't throw - we don't want logging failures to break the main process
+      // Don't throw — logging failures must not break the main process
     }
   }
 
-  /**
-   * Convenience methods for different log types
-   */
   async info(message: string): Promise<void> {
     return this.append('info', message)
   }
@@ -74,17 +70,44 @@ export class TaskLogger {
   }
 
   /**
+   * Persist a structured error for debugging (DB + log stream).
+   * Writes JSON to tasks.error so operators can filter by code/category.
+   */
+  async logStructuredError(structured: StructuredSandboxError, context?: string): Promise<void> {
+    try {
+      const payload = {
+        ...structured,
+        context: context || undefined,
+        at: new Date().toISOString(),
+      }
+      const human = formatStructuredError(structured)
+      const logEntry = createErrorLog(context ? `${context}: ${human}` : human)
+
+      const currentTask = await db.select().from(tasks).where(eq(tasks.id, this.taskId)).limit(1)
+      const existingLogs = currentTask[0]?.logs || []
+
+      await db
+        .update(tasks)
+        .set({
+          error: JSON.stringify(payload),
+          logs: [...existingLogs, logEntry],
+          updatedAt: new Date(),
+        })
+        .where(eq(tasks.id, this.taskId))
+    } catch {
+      // swallow
+    }
+  }
+
+  /**
    * Update task progress along with a log message
    */
   async updateProgress(progress: number, message: string): Promise<void> {
     try {
       const logEntry = createInfoLog(message)
-
-      // Get current task to preserve existing logs
       const currentTask = await db.select().from(tasks).where(eq(tasks.id, this.taskId)).limit(1)
       const existingLogs = currentTask[0]?.logs || []
 
-      // Update both progress and logs
       await db
         .update(tasks)
         .set({
@@ -93,23 +116,28 @@ export class TaskLogger {
           updatedAt: new Date(),
         })
         .where(eq(tasks.id, this.taskId))
-
-      // Task progress: ${progress}%
     } catch {
-      // Failed to update progress
+      // swallow
     }
   }
 
   /**
-   * Update task status along with a log message
-   * Note: completedAt is only set when PR is merged, not when status changes to 'completed'
+   * Atomically update task status.
+   * Will not overwrite a terminal status (completed / error / stopped)
+   * unless `force` is true — prevents race conditions between timeout,
+   * cancellation, and normal completion paths.
    */
-  async updateStatus(status: 'pending' | 'processing' | 'completed' | 'error', message?: string): Promise<void> {
+  async updateStatus(
+    status: 'pending' | 'processing' | 'completed' | 'error' | 'stopped',
+    message?: string,
+    options?: { force?: boolean; errorMessage?: string },
+  ): Promise<boolean> {
     try {
       const updates: {
-        status: 'pending' | 'processing' | 'completed' | 'error'
+        status: 'pending' | 'processing' | 'completed' | 'error' | 'stopped'
         updatedAt: Date
         logs?: LogEntry[]
+        error?: string
       } = {
         status,
         updatedAt: new Date(),
@@ -122,18 +150,29 @@ export class TaskLogger {
         updates.logs = [...existingLogs, logEntry]
       }
 
-      await db.update(tasks).set(updates).where(eq(tasks.id, this.taskId))
+      if (options?.errorMessage) {
+        updates.error = options.errorMessage
+      }
 
-      // Task status: ${status}
+      // Atomic: only update if still non-terminal (unless force)
+      if (options?.force) {
+        await db.update(tasks).set(updates).where(eq(tasks.id, this.taskId))
+        return true
+      }
+
+      const result = await db
+        .update(tasks)
+        .set(updates)
+        .where(and(eq(tasks.id, this.taskId), notInArray(tasks.status, [...TERMINAL_STATUSES])))
+        .returning({ id: tasks.id })
+
+      return result.length > 0
     } catch {
-      // Failed to update status
+      return false
     }
   }
 }
 
-/**
- * Create a logger instance for a specific task
- */
 export function createTaskLogger(taskId: string): TaskLogger {
   return new TaskLogger(taskId)
 }
