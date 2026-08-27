@@ -4,7 +4,11 @@ import { useState, useMemo } from 'react'
 import { useTask } from '@/lib/hooks/use-task'
 import { TaskDetails } from '@/components/task-details'
 import { SharedHeader } from '@/components/shared-header'
-import { TaskActions } from '@/components/task-actions'
+import { TaskActions, retryTask } from '@/components/task-actions'
+import { TaskErrorBanner } from '@/components/task-error-banner'
+import { toast } from 'sonner'
+import { useRouter } from 'next/navigation'
+import { useTasks } from '@/components/app-layout'
 import { LogsPane } from '@/components/logs-pane'
 import type { Session } from '@/lib/session/types'
 
@@ -41,7 +45,25 @@ export function TaskPageClient({
   maxSandboxDuration = 300,
 }: TaskPageClientProps) {
   const { task, isLoading, error } = useTask(taskId)
-  const [logsPaneHeight, setLogsPaneHeight] = useState(40) // Default to collapsed height
+  const [logsPaneHeight, setLogsPaneHeight] = useState(40)
+  const [isRetrying, setIsRetrying] = useState(false)
+  const router = useRouter()
+  const { refreshTasks } = useTasks()
+
+  const handleRetry = async () => {
+    if (!task) return
+    setIsRetrying(true)
+    try {
+      const newId = await retryTask(task)
+      toast.success('Retry started')
+      await refreshTasks()
+      if (newId) router.push(`/tasks/${newId}`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to retry task')
+    } finally {
+      setIsRetrying(false)
+    }
+  }
 
   const repoInfo = useMemo(() => parseRepoFromUrl(task?.repoUrl ?? null), [task?.repoUrl])
 
@@ -91,12 +113,12 @@ export function TaskPageClient({
         />
       </div>
 
-      {/* Task details */}
+      <TaskErrorBanner task={task} onRetry={handleRetry} isRetrying={isRetrying} />
+
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden" style={{ paddingBottom: `${logsPaneHeight}px` }}>
         <TaskDetails task={task} maxSandboxDuration={maxSandboxDuration} />
       </div>
 
-      {/* Logs pane at bottom */}
       <LogsPane task={task} onHeightChange={setLogsPaneHeight} />
     </div>
   )
