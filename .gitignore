@@ -5,7 +5,7 @@
 /.pnp
 .pnp.*
 .yarn/*
-!.yarn/patches
+!.yarn.patches
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
@@ -32,6 +32,13 @@ yarn-error.log*
 
 # env files
 .env*
+!.env.local.example
+
+# local SQLite database (fallback when POSTGRES_URL is unset)
+*.db
+*.db-journal
+local.db
+data/
 
 # vercel
 .vercel
